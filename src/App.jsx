@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback } from "react";
-
+ 
 const MEAL_TYPES = ["早餐", "午餐", "晚餐", "點心"];
 const WEEKDAYS = ["日", "一", "二", "三", "四", "五", "六"];
 const TABS = ["日記", "週總結", "月總結"];
-
+ 
 function getDaysInMonth(year, month) { return new Date(year, month + 1, 0).getDate(); }
 function getFirstDayOfWeek(year, month) { return new Date(year, month, 1).getDay(); }
 function toKey(year, month, day) {
@@ -13,35 +13,21 @@ function todayInfo() {
   const d = new Date();
   return { year: d.getFullYear(), month: d.getMonth(), day: d.getDate() };
 }
-
+ 
 // localStorage helpers
 const storage = {
   get: (key) => { try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : null; } catch { return null; } },
   set: (key, value) => { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} },
 };
-
-async function analyzeProtein(foodDesc) {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 1000,
-      system: `你是一位保守的營養分析師。使用者會輸入他們吃的食物描述（可能有錯別字或簡寫），你要：
-1. 判斷最有可能的食物是什麼
-2. 給出保守的蛋白質估算（以台灣常見份量為基準）
-3. 只回傳 JSON，格式如下，不要有任何其他文字：
-{"food": "判斷出的食物名稱", "protein_g": 數字, "reason": "簡短說明（20字內）"}
-注意：保守估算，寧可低估不要高估。`,
-      messages: [{ role: "user", content: foodDesc }],
-    }),
-  });
-  const data = await res.json();
-  const text = data.content?.find((c) => c.type === "text")?.text || "";
-  const clean = text.replace(/```json|```/g, "").trim();
-  return JSON.parse(clean);
+ 
+import { analyzeLocal } from "./foodDB.js";
+ 
+function analyzeProtein(foodDesc) {
+  const result = analyzeLocal(foodDesc);
+  if (!result) throw new Error("找不到對應食物");
+  return result;
 }
-
+ 
 const S = {
   card: {
     background: "rgba(255,255,255,0.04)",
@@ -62,7 +48,7 @@ const S = {
     boxSizing: "border-box",
   },
 };
-
+ 
 function GoalBar({ goal, total }) {
   const pct = goal > 0 ? Math.min((total / goal) * 100, 100) : 0;
   const color = pct >= 100 ? "#a8e6a3" : pct >= 70 ? "#f0c060" : "#ff8080";
@@ -77,28 +63,26 @@ function GoalBar({ goal, total }) {
     </div>
   );
 }
-
+ 
 function MealRow({ meal, onUpdate, onDelete, index }) {
-  const [analyzing, setAnalyzing] = useState(false);
   const [error, setError] = useState("");
-
-  const handleAnalyze = async () => {
+ 
+  const handleAnalyze = () => {
     if (!meal.food.trim()) { setError("請先填寫食物描述"); return; }
-    setError(""); setAnalyzing(true);
+    setError("");
     try {
-      const result = await analyzeProtein(meal.food);
-      onUpdate(index, { ...meal, protein: String(result.protein_g), analyzed: result.food, reason: result.reason });
-    } catch { setError("分析失敗，請稍後再試"); }
-    setAnalyzing(false);
+      const result = analyzeProtein(meal.food);
+      onUpdate(index, { ...meal, protein: String(result.protein), analyzed: result.label, reason: `信心度：${result.confidence}` });
+    } catch { setError("找不到這個食物，請手動輸入克數"); }
   };
-
+ 
   const handleConfirm = () => {
     if (!meal.food.trim()) { setError("請先填寫食物描述"); return; }
     if (!meal.protein) { setError("請填寫蛋白質克數，或使用系統分析"); return; }
     setError("");
     onUpdate(index, { ...meal, confirmed: true });
   };
-
+ 
   if (meal.confirmed) {
     return (
       <div style={{
@@ -126,7 +110,7 @@ function MealRow({ meal, onUpdate, onDelete, index }) {
       </div>
     );
   }
-
+ 
   return (
     <div style={{ ...S.card, marginBottom: 10, padding: "14px 16px", position: "relative" }}>
       <button onClick={() => onDelete(index)} style={{ position: "absolute", top: 10, right: 12, background: "none", border: "none", color: "#ff6b6b", cursor: "pointer", fontSize: 18 }}>×</button>
@@ -152,12 +136,12 @@ function MealRow({ meal, onUpdate, onDelete, index }) {
         <input placeholder="蛋白質 g（選填）" value={meal.protein} type="number" min="0"
           onChange={e => onUpdate(index, { ...meal, protein: e.target.value })}
           style={{ ...S.input, flex: 1, color: "#a8e6a3" }} />
-        <button onClick={handleAnalyze} disabled={analyzing} style={{
-          background: analyzing ? "rgba(168,230,163,0.1)" : "rgba(168,230,163,0.2)",
+        <button onClick={handleAnalyze} style={{
+          background: "rgba(168,230,163,0.2)",
           border: "1px solid rgba(168,230,163,0.4)", color: "#a8e6a3", borderRadius: 8,
-          padding: "8px 12px", cursor: analyzing ? "not-allowed" : "pointer", fontSize: 12,
+          padding: "8px 12px", cursor: "pointer", fontSize: 12,
           fontFamily: "inherit", whiteSpace: "nowrap",
-        }}>{analyzing ? "分析中..." : "🤖 系統分析"}</button>
+        }}>🔍 系統分析</button>
       </div>
       {error && <div style={{ color: "#ff6b6b", fontSize: 12, marginBottom: 8 }}>{error}</div>}
       <button onClick={handleConfirm} style={{
@@ -168,7 +152,7 @@ function MealRow({ meal, onUpdate, onDelete, index }) {
     </div>
   );
 }
-
+ 
 function GoalSettings({ goal, onSave }) {
   const [open, setOpen] = useState(false);
   const [min, setMin] = useState(String(goal.min));
@@ -204,13 +188,13 @@ function GoalSettings({ goal, onSave }) {
     </div>
   );
 }
-
+ 
 function DayModal({ viewYear, viewMonth, day, dayData, setDayData, goal, today, onClose }) {
   const currentKey = toKey(viewYear, viewMonth, day);
   const meals = dayData[currentKey] || [];
   const totalProtein = meals.filter(m => m.confirmed !== false).reduce((sum, m) => sum + (parseFloat(m.protein) || 0), 0);
   const isTodayDay = day === today.day && viewMonth === today.month && viewYear === today.year;
-
+ 
   const saveMeals = (newMeals) => {
     const updated = { ...dayData, [currentKey]: newMeals };
     setDayData(updated);
@@ -219,7 +203,7 @@ function DayModal({ viewYear, viewMonth, day, dayData, setDayData, goal, today, 
   const addMeal = () => saveMeals([...meals, { type: "早餐", food: "", protein: "", analyzed: "", reason: "" }]);
   const updateMeal = (i, m) => { const u = [...meals]; u[i] = m; saveMeals(u); };
   const deleteMeal = (i) => saveMeals(meals.filter((_, idx) => idx !== i));
-
+ 
   return (
     <div onClick={onClose} style={{
       position: "fixed", inset: 0, zIndex: 1000,
@@ -284,7 +268,7 @@ function DayModal({ viewYear, viewMonth, day, dayData, setDayData, goal, today, 
     </div>
   );
 }
-
+ 
 function WeeklySummary({ viewYear, viewMonth, dayData, goal }) {
   const daysInMonth = getDaysInMonth(viewYear, viewMonth);
   const firstDow = getFirstDayOfWeek(viewYear, viewMonth);
@@ -296,13 +280,13 @@ function WeeklySummary({ viewYear, viewMonth, dayData, goal }) {
     if (week.length === 7) { weeks.push(week); week = []; }
   }
   if (week.length > 0) { while (week.length < 7) week.push(null); weeks.push(week); }
-
+ 
   const getDayTotal = (d) => {
     if (!d) return 0;
     const ms = dayData[toKey(viewYear, viewMonth, d)] || [];
     return ms.filter(m => m.confirmed !== false).reduce((s, m) => s + (parseFloat(m.protein) || 0), 0);
   };
-
+ 
   return (
     <div>
       {weeks.map((week, wi) => {
@@ -359,7 +343,7 @@ function WeeklySummary({ viewYear, viewMonth, dayData, goal }) {
     </div>
   );
 }
-
+ 
 function MonthlySummary({ viewYear, viewMonth, dayData, goal }) {
   const daysInMonth = getDaysInMonth(viewYear, viewMonth);
   const today = todayInfo();
@@ -378,7 +362,7 @@ function MonthlySummary({ viewYear, viewMonth, dayData, goal }) {
   const avgProtein = recordedDays > 0 ? Math.round(totalProtein / recordedDays) : 0;
   const goalRate = recordedDays > 0 ? Math.round((goalDays / recordedDays) * 100) : 0;
   const maxTotal = Math.max(...dailyTotals.map(d => d.total), goal.max, 1);
-
+ 
   return (
     <div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
@@ -433,7 +417,7 @@ function MonthlySummary({ viewYear, viewMonth, dayData, goal }) {
     </div>
   );
 }
-
+ 
 export default function ProteinJournal() {
   const today = todayInfo();
   const [tab, setTab] = useState("日記");
@@ -443,17 +427,17 @@ export default function ProteinJournal() {
   const [dayData, setDayData] = useState({});
   const [loaded, setLoaded] = useState(false);
   const [goal, setGoal] = useState({ min: 110, max: 120 });
-
+ 
   useEffect(() => {
     const saved = storage.get("protein:goal");
     if (saved) setGoal(saved);
   }, []);
-
+ 
   const saveGoal = (g) => {
     setGoal(g);
     storage.set("protein:goal", g);
   };
-
+ 
   const loadMonth = useCallback((year, month) => {
     const days = getDaysInMonth(year, month);
     const result = {};
@@ -464,25 +448,25 @@ export default function ProteinJournal() {
     setDayData(result);
     setLoaded(true);
   }, []);
-
+ 
   useEffect(() => { setLoaded(false); loadMonth(viewYear, viewMonth); }, [viewYear, viewMonth]);
-
+ 
   const getDayTotal = (d) => {
     const ms = dayData[toKey(viewYear, viewMonth, d)] || [];
     return ms.filter(m => m.confirmed !== false).reduce((s, m) => s + (parseFloat(m.protein) || 0), 0);
   };
-
+ 
   const prevMonth = () => {
     if (viewMonth === 0) { setViewYear(y => y - 1); setViewMonth(11); } else setViewMonth(m => m - 1);
   };
   const nextMonth = () => {
     if (viewMonth === 11) { setViewYear(y => y + 1); setViewMonth(0); } else setViewMonth(m => m + 1);
   };
-
+ 
   const daysInMonth = getDaysInMonth(viewYear, viewMonth);
   const firstDay = getFirstDayOfWeek(viewYear, viewMonth);
   const isToday = (d) => d === today.day && viewMonth === today.month && viewYear === today.year;
-
+ 
   return (
     <div style={{
       minHeight: "100vh", background: "#0f1a0f", color: "#e8f5e8",
@@ -494,9 +478,9 @@ export default function ProteinJournal() {
           <div style={{ fontSize: 11, letterSpacing: 4, color: "#a8e6a3", marginBottom: 4, textTransform: "uppercase" }}>Protein Journal</div>
           <h1 style={{ margin: 0, fontSize: 26, fontWeight: 700, color: "#fff" }}>蛋白質日記</h1>
         </div>
-
+ 
         <GoalSettings goal={goal} onSave={saveGoal} />
-
+ 
         <div style={{ display: "flex", gap: 6, marginBottom: 16 }}>
           {TABS.map(t => (
             <button key={t} onClick={() => setTab(t)} style={{
@@ -508,7 +492,7 @@ export default function ProteinJournal() {
             }}>{t}</button>
           ))}
         </div>
-
+ 
         <div style={{ ...S.card, marginBottom: 16, padding: "12px 20px" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <button onClick={prevMonth} style={{ background: "none", border: "none", color: "#a8e6a3", fontSize: 22, cursor: "pointer" }}>‹</button>
@@ -516,7 +500,7 @@ export default function ProteinJournal() {
             <button onClick={nextMonth} style={{ background: "none", border: "none", color: "#a8e6a3", fontSize: 22, cursor: "pointer" }}>›</button>
           </div>
         </div>
-
+ 
         {tab === "日記" && (
           <div style={S.card}>
             <div style={{ fontSize: 12, color: "rgba(255,255,255,0.4)", marginBottom: 12 }}>點選日期來記錄蛋白質攝取</div>
@@ -546,13 +530,13 @@ export default function ProteinJournal() {
             </div>
           </div>
         )}
-
+ 
         {tab === "週總結" && (loaded ? <WeeklySummary viewYear={viewYear} viewMonth={viewMonth} dayData={dayData} goal={goal} /> : <div style={{ textAlign: "center", color: "rgba(255,255,255,0.3)", padding: 40 }}>載入中...</div>)}
         {tab === "月總結" && (loaded ? <MonthlySummary viewYear={viewYear} viewMonth={viewMonth} dayData={dayData} goal={goal} /> : <div style={{ textAlign: "center", color: "rgba(255,255,255,0.3)", padding: 40 }}>載入中...</div>)}
-
+ 
         <div style={{ textAlign: "center", marginTop: 16, fontSize: 11, color: "rgba(255,255,255,0.2)" }}>資料儲存於本機瀏覽器</div>
       </div>
-
+ 
       {modalDay !== null && (
         <DayModal viewYear={viewYear} viewMonth={viewMonth} day={modalDay}
           dayData={dayData} setDayData={setDayData} goal={goal} today={today}
@@ -561,3 +545,4 @@ export default function ProteinJournal() {
     </div>
   );
 }
+ 
